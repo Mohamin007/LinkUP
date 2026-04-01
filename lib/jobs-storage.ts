@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { sendConversationMessage } from '@/lib/chat-storage'
 
 export const RADIUS_OPTIONS = [5, 10, 20, 50, 100, 'anywhere'] as const
 
@@ -357,17 +358,15 @@ export async function applyToJob(jobId: string, applicantId: string): Promise<{ 
   const jobTitle = jobData.title || 'your job'
   const posterId = jobData.poster_id
 
-  const { error: messageError } = await supabase
-    .from('messages')
-    .insert({
-      sender_id: applicantId,
-      recipient_id: posterId,
-      job_id: jobId,
-      content: 'Hi! I saw your job post and I am interested. Please let me know if you are available.',
-    })
+  const messageResult = await sendConversationMessage({
+    senderId: applicantId,
+    recipientId: posterId,
+    jobId,
+    content: 'Hi! I saw your job post and I am interested. Please let me know if you are available.',
+  })
 
-  if (messageError) {
-    return { applied: false, duplicate: false, error: messageError.message }
+  if (messageResult.error) {
+    return { applied: false, duplicate: false, error: messageResult.error }
   }
 
   const { error: notificationError } = await supabase
