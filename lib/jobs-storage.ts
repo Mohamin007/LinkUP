@@ -183,8 +183,9 @@ export async function fetchOpenJobs(filters?: JobFilters): Promise<PostedJob[]> 
 }
 
 export function subscribeToOpenJobs(onChange: () => void): () => void {
+  const channelName = `jobs-feed-realtime-${Math.random().toString(36).slice(2)}`
   const channel = supabase
-    .channel('jobs-feed-realtime')
+    .channel(channelName)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'jobs' }, () => {
       onChange()
     })
@@ -289,6 +290,21 @@ export async function removePostedJob(jobId: string, ownerId: string): Promise<{
   return {}
 }
 
+export async function checkApplicationExists(jobId: string, applicantId: string): Promise<{ exists: boolean; error?: string }> {
+  const { data: existingApplication, error: checkError } = await supabase
+    .from('applications')
+    .select('id')
+    .eq('job_id', jobId)
+    .eq('applicant_id', applicantId)
+    .maybeSingle()
+
+  if (checkError && checkError.code !== 'PGRST116') {
+    return { exists: false, error: checkError.message }
+  }
+
+  return { exists: !!existingApplication }
+}
+
 export async function applyToJob(jobId: string, applicantId: string): Promise<{ applied: boolean; duplicate: boolean; error?: string }> {
   const { data: existingApplication, error: checkError } = await supabase
     .from('applications')
@@ -314,6 +330,56 @@ export async function applyToJob(jobId: string, applicantId: string): Promise<{ 
 
   if (insertError) {
     return { applied: false, duplicate: false, error: insertError.message }
+  }
+
+  const { data: profileData, error: profileError } = await supabase
+    .from('profiles')
+    .select('full_name')
+    .eq('id', applicantId)
+    .maybeSingle()
+
+  if (profileError) {
+    return { applied: false, duplicate: false, error: profileError.message }
+  }
+
+  const applicantName = profileData?.full_name || 'Someone'
+
+  const { data: jobData, error: jobError } = await supabase
+    .from('jobs')
+    .select('title, poster_id')
+    .eq('id', jobId)
+    .maybeSingle()
+
+  if (jobError || !jobData) {
+    return { applied: false, duplicate: false, error: jobError?.message || 'Could not load job details.' }
+  }
+
+  const jobTitle = jobData.title || 'your job'
+  const posterId = jobData.poster_id
+
+  const { error: messageError } = await supabase
+    .from('messages')
+    .insert({
+      sender_id: applicantId,
+      recipient_id: posterId,
+      job_id: jobId,
+      content: 'Hi! I saw your job post and I am interested. Please let me know if you are available.',
+    })
+
+  if (messageError) {
+    return { applied: false, duplicate: false, error: messageError.message }
+  }
+
+  const { error: notificationError } = await supabase
+    .from('notifications')
+    .insert({
+      user_id: posterId,
+      message: `${applicantName} is interested in your job: ${jobTitle}`,
+      read: false,
+    })
+
+  if (notificationError) {
+    return { applied: false, duplicate: false, error: notificationError.message }
   }
 
   return { applied: true, duplicate: false }

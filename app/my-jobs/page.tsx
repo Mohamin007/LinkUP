@@ -32,10 +32,8 @@ export default function MyJobsPage() {
     const nextJobs = await fetchMyJobs(userId)
     setJobs(nextJobs)
 
-    const occupiedJobs = nextJobs.filter((job) => job.status === 'occupied')
-
     const applicationEntries = await Promise.all(
-      occupiedJobs.map(async (job) => {
+      nextJobs.map(async (job) => {
         const applications = await fetchApplicationsForJob(job.id)
         return [job.id, applications] as const
       }),
@@ -185,6 +183,7 @@ export default function MyJobsPage() {
                       </div>
 
                       <p className="text-muted-foreground">{job.description}</p>
+                      <p className="text-sm text-muted-foreground">Applications: {applications.length}</p>
                       <p className="text-sm text-muted-foreground">
                         {job.location} • Radius: {job.isRemote ? 'Remote' : job.radiusKm === null ? 'Anywhere' : `${job.radiusKm} km`}
                       </p>

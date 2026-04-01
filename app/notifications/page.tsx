@@ -1,111 +1,187 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { ArrowLeft, Bell, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Bell, Briefcase, MessageSquare, Star, Zap, X, ArrowLeft } from 'lucide-react'
+import { getCurrentUser, type AuthUser } from '@/lib/auth-storage'
+import { supabase } from '@/lib/supabase'
+import {
+  fetchUserNotifications,
+  markNotificationAsRead,
+  type Notification,
+} from '@/lib/chat-storage'
 
-const mockNotifications = [
-  {
-    id: '1',
-    type: 'job_match',
-    title: 'New Job Match!',
-    description: 'A furniture moving job matching your skills just posted nearby.',
-    timestamp: '2 hours ago',
-    read: false,
-    actionUrl: '/jobs/2',
-  },
-  {
-    id: '2',
-    type: 'message',
-    title: 'New Message from Sarah M.',
-    description: 'Can you confirm the time for tomorrow?',
-    timestamp: '4 hours ago',
-    read: false,
-    actionUrl: '/messages',
-  },
-  {
-    id: '3',
-    type: 'rating',
-    title: 'You Received a 5-Star Review!',
-    description: 'John D. left a review: "Excellent work!"',
-    timestamp: '1 day ago',
-    read: true,
-    actionUrl: '/profile',
-  },
-  {
-    id: '4',
-    type: 'system',
-    title: 'Earnings Milestone Reached',
-    description: 'You&apos;ve earned ₹2,000 on LinkUp!',
-    timestamp: '2 days ago',
-    read: true,
-    actionUrl: '/profile',
-  },
-  {
-    id: '5',
-    type: 'job_match',
-    title: 'Cleaning Job Near You',
-    description: 'Quick house cleaning - ₹40-₹60, 3-4 hours',
-    timestamp: '3 days ago',
-    read: true,
-    actionUrl: '/jobs/1',
-  },
-]
+interface NotificationRealtimeRow {
+  id: string
+  user_id: string
+  message: string
+  created_at: string | null
+  read: boolean
+}
+
+function formatRelativeTime(iso: string): string {
+  const timestamp = new Date(iso).getTime()
+  if (Number.isNaN(timestamp)) {
+    return 'just now'
+  }
+
+  const seconds = Math.max(1, Math.floor((Date.now() - timestamp) / 1000))
+
+  if (seconds < 60) {
+    return `${seconds}s ago`
+  }
+
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) {
+    return `${minutes}m ago`
+  }
+
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) {
+    return `${hours}h ago`
+  }
+
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+}
+
+function getIcon() {
+  return <Bell className="w-5 h-5 text-primary" />
+}
 
 export default function NotificationsPage() {
-  const [notifications, setNotifications] = useState(mockNotifications)
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null)
+  const [notifications, setNotifications] = useState<Notification[]>([])
   const [filter, setFilter] = useState<'all' | 'unread'>('all')
+  const [isLoading, setIsLoading] = useState(true)
+  const [errorMessage, setErrorMessage] = useState('')
 
-  const getIcon = (type: string) => {
-    switch (type) {
-      case 'job_match':
-        return <Briefcase className="w-5 h-5 text-blue-500" />
-      case 'message':
-        return <MessageSquare className="w-5 h-5 text-green-500" />
-      case 'rating':
-        return <Star className="w-5 h-5 text-yellow-500" />
-      case 'system':
-        return <Zap className="w-5 h-5 text-orange-500" />
-      default:
-        return <Bell className="w-5 h-5 text-primary" />
+  const loadNotifications = async (userId: string) => {
+    const notificationsList = await fetchUserNotifications(userId)
+    setNotifications(notificationsList)
+    setErrorMessage('')
+  }
+
+  const markAllAsRead = async (userId: string) => {
+    const { error } = await supabase
+      .from('notifications')
+      .update({ read: true })
+      .eq('user_id', userId)
+      .eq('read', false)
+
+    if (error) {
+      setErrorMessage(error.message)
     }
   }
 
+  useEffect(() => {
+    const initialize = async () => {
+      const user = await getCurrentUser()
+      setCurrentUser(user)
+
+      if (user) {
+        await markAllAsRead(user.id)
+        await loadNotifications(user.id)
+      }
+
+      setIsLoading(false)
+    }
+
+    void initialize()
+  }, [])
+
+  useEffect(() => {
+    const userId = currentUser?.id
+    if (!userId) {
+      return
+    }
+
+    const channel = supabase
+      .channel(`notifications-realtime-${userId}-page`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const next = payload.new as NotificationRealtimeRow
+          setNotifications((previous) => [
+            {
+              id: next.id,
+              userId: next.user_id,
+              message: next.message,
+              createdAt: next.created_at || new Date().toISOString(),
+              read: !!next.read,
+            },
+            ...previous,
+          ])
+        },
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [currentUser?.id])
+
   const handleDismiss = (id: string) => {
-    setNotifications(notifications.filter((n) => n.id !== id))
+    setNotifications((previous) => previous.filter((notification) => notification.id !== id))
   }
 
-  const handleMarkAsRead = (id: string) => {
-    setNotifications(
-      notifications.map((n) => (n.id === id ? { ...n, read: true } : n))
+  const handleMarkAsRead = async (id: string) => {
+    const result = await markNotificationAsRead(id)
+    if (result.error) {
+      setErrorMessage(result.error)
+      return
+    }
+
+    setNotifications((previous) =>
+      previous.map((notification) => (notification.id === id ? { ...notification, read: true } : notification)),
     )
   }
 
   const filteredNotifications =
-    filter === 'unread' ? notifications.filter((n) => !n.read) : notifications
+    filter === 'unread' ? notifications.filter((notification) => !notification.read) : notifications
+  const unreadCount = notifications.filter((notification) => !notification.read).length
 
-  const unreadCount = notifications.filter((n) => !n.read).length
+  if (isLoading) {
+    return (
+      <div className="bg-background min-h-screen py-8">
+        <div className="max-w-2xl mx-auto px-4">
+          <Card className="p-8 text-center text-muted-foreground">Loading notifications...</Card>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="bg-background min-h-screen py-8">
       <div className="max-w-2xl mx-auto px-4">
-        <Link href="/">
+        <Link href="/jobs">
           <Button variant="ghost" className="mb-8">
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Home
+            Back to Jobs
           </Button>
         </Link>
 
         <div className="mb-8">
           <h1 className="text-4xl font-bold mb-2 text-foreground">Notifications</h1>
-          <p className="text-muted-foreground">
-            You have {unreadCount} unread notification{unreadCount !== 1 ? 's' : ''}
-          </p>
+          {!currentUser ? (
+            <p className="text-muted-foreground">Please log in to view notifications.</p>
+          ) : (
+            <p className="text-muted-foreground">
+              You have {unreadCount} unread notification{unreadCount !== 1 ? 's' : ''}
+            </p>
+          )}
         </div>
 
-        {/* Filter Tabs */}
+        {errorMessage && <p className="text-sm text-destructive mb-4">{errorMessage}</p>}
+
         <div className="flex gap-2 mb-6 border-b border-border">
           <button
             onClick={() => setFilter('all')}
@@ -129,7 +205,6 @@ export default function NotificationsPage() {
           </button>
         </div>
 
-        {/* Notifications List */}
         {filteredNotifications.length > 0 ? (
           <div className="space-y-4">
             {filteredNotifications.map((notification) => (
@@ -139,26 +214,30 @@ export default function NotificationsPage() {
                   !notification.read ? 'border-primary/50 bg-primary/5' : ''
                 }`}
               >
-                <div className="mt-1 flex-shrink-0">{getIcon(notification.type)}</div>
+                <div className="mt-1 flex-shrink-0">{getIcon()}</div>
 
                 <div className="flex-1 min-w-0">
-                  <h3 className={`font-semibold text-foreground ${!notification.read ? 'text-primary' : ''}`}>
-                    {notification.title}
-                  </h3>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    {notification.description}
+                  <p className={`text-sm ${!notification.read ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
+                    {notification.message}
                   </p>
                   <div className="flex items-center justify-between mt-3">
-                    <p className="text-xs text-muted-foreground">
-                      {notification.timestamp}
-                    </p>
-                    {notification.actionUrl && (
-                      <Link href={notification.actionUrl}>
+                    <p className="text-xs text-muted-foreground">{formatRelativeTime(notification.createdAt)}</p>
+                    <div className="flex items-center gap-2">
+                      {!notification.read && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void handleMarkAsRead(notification.id)}
+                        >
+                          Mark read
+                        </Button>
+                      )}
+                      <Link href="/messages">
                         <Button variant="outline" size="sm">
                           View
                         </Button>
                       </Link>
-                    )}
+                    </div>
                   </div>
                 </div>
 
@@ -176,15 +255,10 @@ export default function NotificationsPage() {
           <div className="text-center py-12">
             <Bell className="h-16 w-16 text-muted-foreground mx-auto mb-4 opacity-50" />
             <p className="text-lg text-muted-foreground mb-4">
-              {filter === 'unread'
-                ? 'No unread notifications'
-                : 'No notifications yet'}
+              {filter === 'unread' ? 'No unread notifications' : 'No notifications yet'}
             </p>
             {filter === 'unread' && (
-              <Button
-                variant="outline"
-                onClick={() => setFilter('all')}
-              >
+              <Button variant="outline" onClick={() => setFilter('all')}>
                 View All Notifications
               </Button>
             )}

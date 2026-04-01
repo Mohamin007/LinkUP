@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useState, useEffect } from 'react'
-import { Menu, X, Moon, Sun, Palette, LogOut } from 'lucide-react'
+import { Menu, X, Moon, Sun, Palette, LogOut, Bell } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,6 +11,7 @@ import {
   onAuthStateChange,
   type AuthUser,
 } from '@/lib/auth-storage'
+import { getUnreadNotificationCount, subscribeToNotifications } from '@/lib/chat-storage'
 
 interface NavItem {
   label: string
@@ -23,6 +24,7 @@ export function Navbar() {
   const [mounted, setMounted] = useState(false)
   const [colorTheme, setColorTheme] = useState('blue')
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null)
+  const [unreadCount, setUnreadCount] = useState(0)
   const { theme, setTheme } = useTheme()
 
   const toggleMenu = () => setIsOpen(!isOpen)
@@ -37,6 +39,13 @@ export function Navbar() {
       }
 
       setCurrentUser(user)
+      
+      if (user) {
+        const count = await getUnreadNotificationCount(user.id)
+        if (isActive) {
+          setUnreadCount(count)
+        }
+      }
     }
 
     const savedTheme = localStorage.getItem('linkup-color-theme') || 'blue'
@@ -62,6 +71,21 @@ export function Navbar() {
       window.removeEventListener('focus', handleFocus)
     }
   }, [])
+
+  useEffect(() => {
+    if (!currentUser) {
+      return
+    }
+
+    const unsubscribe = subscribeToNotifications(currentUser.id, async () => {
+      const count = await getUnreadNotificationCount(currentUser.id)
+      setUnreadCount(count)
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [currentUser])
 
   useEffect(() => {
     const handleOutsideClick = () => setShowThemeMenu(false)
@@ -117,9 +141,16 @@ export function Navbar() {
               <Link
                 key={item.href}
                 href={item.href}
-                className="px-4 py-2 text-foreground hover:text-primary transition-colors duration-300 rounded-lg hover:bg-white/5 dark:hover:bg-white/5"
+                className="relative px-4 py-2 text-foreground hover:text-primary transition-colors duration-300 rounded-lg hover:bg-white/5 dark:hover:bg-white/5"
               >
-                {item.label}
+                <span className="flex items-center gap-2">
+                  {item.label}
+                  {item.href === '/notifications' && unreadCount > 0 && (
+                    <span className="inline-flex items-center justify-center h-5 w-5 text-xs font-bold text-white bg-red-500 rounded-full">
+                      {unreadCount > 99 ? '99+' : unreadCount}
+                    </span>
+                  )}
+                </span>
               </Link>
             ))}
           </div>
@@ -176,6 +207,21 @@ export function Navbar() {
               )}
             </button>
 
+            {currentUser && (
+              <Link
+                href="/notifications"
+                className="relative p-2.5 hover:bg-white/10 dark:hover:bg-white/10 rounded-lg transition-colors duration-300"
+                aria-label="Notifications"
+              >
+                <Bell className="h-5 w-5 text-foreground" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-5 h-5 px-1 text-[10px] font-bold text-white bg-red-500 rounded-full">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </Link>
+            )}
+
             {currentUser ? (
               <Button
                 variant="outline"
@@ -219,10 +265,15 @@ export function Navbar() {
               <Link
                 key={item.href}
                 href={item.href}
-                className="block px-4 py-2.5 text-foreground hover:text-primary hover:bg-white/5 dark:hover:bg-white/5 rounded-lg transition-colors duration-300"
+                className="flex items-center justify-between px-4 py-2.5 text-foreground hover:text-primary hover:bg-white/5 dark:hover:bg-white/5 rounded-lg transition-colors duration-300"
                 onClick={() => setIsOpen(false)}
               >
-                {item.label}
+                <span>{item.label}</span>
+                {item.href === '/notifications' && unreadCount > 0 && (
+                  <span className="inline-flex items-center justify-center h-5 w-5 text-xs font-bold text-white bg-red-500 rounded-full ml-2">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
               </Link>
             ))}
 

@@ -219,8 +219,9 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
 }
 
 export function subscribeToMessages(userId: string, onChange: () => void): () => void {
+  const channelName = `messages-realtime-${userId}-${Math.random().toString(36).slice(2)}`
   const channel = supabase
-    .channel(`messages-realtime-${userId}`)
+    .channel(channelName)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload) => {
       const nextRecord = payload.new as { sender_id?: string; recipient_id?: string }
       const oldRecord = payload.old as { sender_id?: string; recipient_id?: string }
@@ -262,13 +263,15 @@ export async function ensureApplicationConversation(
     return {}
   }
 
+  const messageContent = 'Hi! I saw your job post and I am interested. Please let me know if you are available.'
+
   const { error: insertError } = await supabase
     .from('messages')
     .insert({
       job_id: input.jobId,
       sender_id: input.applicantId,
       recipient_id: input.ownerId,
-      content: `Hi ${input.ownerName}, I can do this job: ${input.jobTitle}.`,
+      content: messageContent,
     })
 
   if (insertError) {
@@ -276,4 +279,118 @@ export async function ensureApplicationConversation(
   }
 
   return {}
+}
+
+export interface ApplicationNotificationInput {
+  jobId: string
+  jobTitle: string
+  applicantId: string
+  applicantName: string
+  ownerId: string
+}
+
+export interface Notification {
+  id: string
+  userId: string
+  message: string
+  createdAt: string
+  read: boolean
+}
+
+interface NotificationRow {
+  id: string
+  user_id: string
+  message: string
+  created_at: string | null
+  read: boolean
+}
+
+export async function createApplicationNotification(input: ApplicationNotificationInput): Promise<{ error?: string }> {
+  const { error } = await supabase
+    .from('notifications')
+    .insert({
+      user_id: input.ownerId,
+      message: `${input.applicantName} is interested in your job: ${input.jobTitle}`,
+      read: false,
+    })
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  return {}
+}
+
+export async function fetchUserNotifications(userId: string): Promise<Notification[]> {
+  const { data, error } = await supabase
+    .from('notifications')
+    .select('id, user_id, message, created_at, read')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+
+  if (error || !data) {
+    return []
+  }
+
+  return (data as NotificationRow[]).map((row) => ({
+    id: row.id,
+    userId: row.user_id,
+    message: row.message,
+    createdAt: row.created_at || new Date().toISOString(),
+    read: row.read,
+  }))
+}
+
+export async function markNotificationAsRead(notificationId: string): Promise<{ error?: string }> {
+  const { error } = await supabase
+    .from('notifications')
+    .update({ read: true })
+    .eq('id', notificationId)
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  return {}
+}
+
+export async function getUnreadNotificationCount(userId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('notifications')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('read', false)
+
+  if (error) {
+    return 0
+  }
+
+  return count || 0
+}
+
+export function subscribeToNotifications(userId: string, onChange: () => void): () => void {
+  const channelName = `notifications-realtime-${userId}-${Math.random().toString(36).slice(2)}`
+  const channel = supabase
+    .channel(channelName)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${userId}`,
+      },
+      (payload) => {
+        const nextRecord = payload.new as { user_id?: string }
+
+        if (nextRecord?.user_id === userId || payload.eventType === 'DELETE') {
+          onChange()
+        }
+      },
+    )
+    .subscribe()
+
+  return () => {
+    supabase.removeChannel(channel)
+  }
 }

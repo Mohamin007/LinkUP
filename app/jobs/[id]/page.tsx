@@ -29,7 +29,6 @@ import {
   removePostedJob,
   type PostedJob,
 } from '@/lib/jobs-storage'
-import { ensureApplicationConversation } from '@/lib/chat-storage'
 
 export default function JobDetailPage() {
   const router = useRouter()
@@ -89,7 +88,6 @@ export default function JobDetailPage() {
     }
 
     setIsApplying(true)
-
     const result = await applyToJob(job.id, currentUser.id)
 
     if (result.error) {
@@ -104,16 +102,7 @@ export default function JobDetailPage() {
       return
     }
 
-    await ensureApplicationConversation({
-      jobId: job.id,
-      applicantId: currentUser.id,
-      applicantName: currentUser.fullName,
-      ownerId: job.posterId,
-      ownerName: job.posterName,
-      jobTitle: job.title,
-    })
-
-    showDialog('Application sent! The poster will contact you via chat.')
+    showDialog('Application sent! The poster will be notified and can contact you via Messages.')
     setIsApplying(false)
   }
 
