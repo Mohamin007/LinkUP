@@ -54,6 +54,7 @@ function getIcon() {
 export default function NotificationsPage() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null)
   const [notifications, setNotifications] = useState<Notification[]>([])
+  const [unreadCount, setUnreadCount] = useState(0)
   const [filter, setFilter] = useState<'all' | 'unread'>('all')
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
@@ -61,6 +62,7 @@ export default function NotificationsPage() {
   const loadNotifications = async (userId: string) => {
     const notificationsList = await fetchUserNotifications(userId)
     setNotifications(notificationsList)
+    setUnreadCount(notificationsList.filter((notification) => !notification.read).length)
     setErrorMessage('')
   }
 
@@ -93,20 +95,19 @@ export default function NotificationsPage() {
   }, [])
 
   useEffect(() => {
-    const userId = currentUser?.id
-    if (!userId) {
+    if (!currentUser) {
       return
     }
 
     const channel = supabase
-      .channel(`notifications-realtime-${userId}-page`)
+      .channel(`notifications-${currentUser.id}-page`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'notifications',
-          filter: `user_id=eq.${userId}`,
+          filter: `user_id=eq.${currentUser.id}`,
         },
         (payload) => {
           const next = payload.new as NotificationRealtimeRow
@@ -120,6 +121,7 @@ export default function NotificationsPage() {
             },
             ...previous,
           ])
+          setUnreadCount((previous) => previous + 1)
         },
       )
       .subscribe()
@@ -127,7 +129,7 @@ export default function NotificationsPage() {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [currentUser?.id])
+  }, [currentUser])
 
   const handleDismiss = (id: string) => {
     setNotifications((previous) => previous.filter((notification) => notification.id !== id))
@@ -143,11 +145,11 @@ export default function NotificationsPage() {
     setNotifications((previous) =>
       previous.map((notification) => (notification.id === id ? { ...notification, read: true } : notification)),
     )
+    setUnreadCount((previous) => Math.max(0, previous - 1))
   }
 
   const filteredNotifications =
     filter === 'unread' ? notifications.filter((notification) => !notification.read) : notifications
-  const unreadCount = notifications.filter((notification) => !notification.read).length
 
   if (isLoading) {
     return (

@@ -11,7 +11,8 @@ import {
   onAuthStateChange,
   type AuthUser,
 } from '@/lib/auth-storage'
-import { getUnreadNotificationCount, subscribeToNotifications } from '@/lib/chat-storage'
+import { getUnreadNotificationCount } from '@/lib/chat-storage'
+import { supabase } from '@/lib/supabase'
 
 interface NavItem {
   label: string
@@ -77,13 +78,24 @@ export function Navbar() {
       return
     }
 
-    const unsubscribe = subscribeToNotifications(currentUser.id, async () => {
-      const count = await getUnreadNotificationCount(currentUser.id)
-      setUnreadCount(count)
-    })
+    const channel = supabase
+      .channel(`notifications-${currentUser.id}-navbar`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${currentUser.id}`,
+        },
+        () => {
+          setUnreadCount((previous) => previous + 1)
+        },
+      )
+      .subscribe()
 
     return () => {
-      unsubscribe()
+      supabase.removeChannel(channel)
     }
   }, [currentUser])
 
