@@ -40,8 +40,7 @@ interface MessageRow {
   id: string
   job_id: string | null
   sender_id: string
-  recipient_id?: string
-  receiver_id?: string
+  recipient_id: string
   content: string
   created_at: string | null
 }
@@ -57,24 +56,14 @@ interface JobTitleRow {
 }
 
 function mapMessageRow(row: MessageRow): ChatMessage {
-  const recipientId = row.recipient_id || row.receiver_id || ''
-
   return {
     id: row.id,
     jobId: row.job_id,
     senderId: row.sender_id,
-    recipientId,
+    recipientId: row.recipient_id,
     content: row.content,
     createdAt: row.created_at || new Date().toISOString(),
   }
-}
-
-function isMissingRecipientColumnError(errorMessage?: string): boolean {
-  if (!errorMessage) {
-    return false
-  }
-
-  return errorMessage.includes('recipient_id')
 }
 
 function makeConversationKey(userA: string, userB: string, jobId: string | null): string {
@@ -125,27 +114,11 @@ export async function fetchInboxConversations(userId: string): Promise<InboxConv
     .or(`sender_id.eq.${userId},recipient_id.eq.${userId}`)
     .order('created_at', { ascending: false })
 
-  let rows: MessageRow[] = []
-
-  if (error) {
-    if (!isMissingRecipientColumnError(error.message)) {
-      return []
-    }
-
-    const { data: fallbackData, error: fallbackError } = await supabase
-      .from('messages')
-      .select('id, job_id, sender_id, receiver_id, content, created_at')
-      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
-      .order('created_at', { ascending: false })
-
-    if (fallbackError || !fallbackData) {
-      return []
-    }
-
-    rows = fallbackData as MessageRow[]
-  } else if (data) {
-    rows = data as MessageRow[]
+  if (error || !data) {
+    return []
   }
+
+  const rows = data as MessageRow[]
 
   if (rows.length === 0) {
     return []
@@ -154,8 +127,7 @@ export async function fetchInboxConversations(userId: string): Promise<InboxConv
   const conversationsById = new Map<string, MessageRow>()
 
   rows.forEach((row) => {
-    const recipientId = row.recipient_id || row.receiver_id || ''
-    const counterpartId = row.sender_id === userId ? recipientId : row.sender_id
+    const counterpartId = row.sender_id === userId ? row.recipient_id : row.sender_id
     const conversationId = makeConversationKey(userId, counterpartId, row.job_id)
 
     if (!conversationsById.has(conversationId)) {
@@ -166,7 +138,7 @@ export async function fetchInboxConversations(userId: string): Promise<InboxConv
   const latestRows = Array.from(conversationsById.entries()).map(([conversationId, row]) => ({
     conversationId,
     row,
-    counterpartId: row.sender_id === userId ? row.recipient_id || row.receiver_id || '' : row.sender_id,
+    counterpartId: row.sender_id === userId ? row.recipient_id : row.sender_id,
   }))
 
   const profileById = await fetchProfiles(latestRows.map((entry) => entry.counterpartId))
@@ -213,35 +185,7 @@ export async function fetchConversationMessages(
 
   const { data, error } = await query
 
-  if (error) {
-    if (!isMissingRecipientColumnError(error.message)) {
-      return []
-    }
-
-    let fallbackQuery = supabase
-      .from('messages')
-      .select('id, job_id, sender_id, receiver_id, content, created_at')
-      .or(
-        `and(sender_id.eq.${currentUserId},receiver_id.eq.${counterpartId}),and(sender_id.eq.${counterpartId},receiver_id.eq.${currentUserId})`,
-      )
-      .order('created_at', { ascending: true })
-
-    if (jobId) {
-      fallbackQuery = fallbackQuery.eq('job_id', jobId)
-    } else {
-      fallbackQuery = fallbackQuery.is('job_id', null)
-    }
-
-    const { data: fallbackData, error: fallbackError } = await fallbackQuery
-
-    if (fallbackError || !fallbackData) {
-      return []
-    }
-
-    return (fallbackData as MessageRow[]).map((row) => mapMessageRow(row))
-  }
-
-  if (!data) {
+  if (error || !data) {
     return []
   }
 
@@ -266,33 +210,8 @@ export async function sendConversationMessage(input: SendMessageInput): Promise<
     .select('id, job_id, sender_id, recipient_id, content, created_at')
     .maybeSingle()
 
-  if (error) {
-    if (!isMissingRecipientColumnError(error.message)) {
-      return { error: error.message || 'Could not send message.' }
-    }
-
-    const { data: fallbackData, error: fallbackError } = await supabase
-      .from('messages')
-      .insert({
-        sender_id: input.senderId,
-        receiver_id: input.recipientId,
-        job_id: input.jobId,
-        content: trimmedContent,
-      })
-      .select('id, job_id, sender_id, receiver_id, content, created_at')
-      .maybeSingle()
-
-    if (fallbackError || !fallbackData) {
-      return { error: fallbackError?.message || 'Could not send message.' }
-    }
-
-    return {
-      message: mapMessageRow(fallbackData as MessageRow),
-    }
-  }
-
-  if (!data) {
-    return { error: 'Could not send message.' }
+  if (error || !data) {
+    return { error: error?.message || 'Could not send message.' }
   }
 
   return {
@@ -305,16 +224,14 @@ export function subscribeToMessages(userId: string, onChange: () => void): () =>
   const channel = supabase
     .channel(channelName)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload) => {
-      const nextRecord = payload.new as { sender_id?: string; recipient_id?: string; receiver_id?: string }
-      const oldRecord = payload.old as { sender_id?: string; recipient_id?: string; receiver_id?: string }
+      const nextRecord = payload.new as { sender_id?: string; recipient_id?: string }
+      const oldRecord = payload.old as { sender_id?: string; recipient_id?: string }
 
       const isRelevant =
         nextRecord?.sender_id === userId ||
         nextRecord?.recipient_id === userId ||
-        nextRecord?.receiver_id === userId ||
         oldRecord?.sender_id === userId ||
-        oldRecord?.recipient_id === userId ||
-        oldRecord?.receiver_id === userId
+        oldRecord?.recipient_id === userId
 
       if (isRelevant) {
         onChange()
