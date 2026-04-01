@@ -19,7 +19,7 @@ LinkUp is a hyperlocal gig economy platform where anyone can post a job and anyo
 - Tailwind CSS
 - Supabase (Database + Auth)
 - Vercel (Deployment)
-
+- check out on https://link-up-gigs.vercel.app/
 ## 🛠️ Getting Started
 1. Clone the repo
 \`\`\`bash
